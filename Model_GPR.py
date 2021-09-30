@@ -45,14 +45,11 @@ class RBF_2:
         if type(Xs) == type(None):
             Xs=X
         dist_norm = np.sum(X**2, 1).reshape(-1, 1) + np.sum(Xs**2, 1) - 2 * X@Xs.T
-        #if str(type(self.l))=='prior_function':
-            #self.l
         if grad:
             return [self.s**2*np.exp(-0.5*dist_norm/self.l)*dist_norm/self.l**3,2*self.s*np.exp(-0.5*dist_norm/self.l)]
         return self.s**2*np.exp(-0.5*dist_norm/self.l**2)
     
-
-    
+#Model for GPR with MAP estimation
     
 class Model:
     def __init__(self, name):
@@ -77,7 +74,8 @@ class Model:
     
     def add_mean(self,mean):
         self.mean = mean
-        
+    
+    #returns covariance matrix and mean of Gaussian process evaluated with parameter vector theta and training inputs
     def build_gp(self,theta,X_train,Y_train):
         K = self.cov(theta[0],theta[1]).evaluate(X_train) + theta[2]**2*np.eye(X_train.shape[0])
         if self.mean is None:
@@ -86,6 +84,7 @@ class Model:
             mu = self.mean(*theta[3:]).evaluate(X_train)
         return K,mu
     
+    #objective function for gradient descent 
     def func_obj(self,X_train,Y_train):
         Y_train = Y_train.ravel()
         def log_p(theta):
@@ -103,9 +102,18 @@ class Model:
                 
             
             K, mu = self.build_gp(theta,X_train,Y_train)
-            K = K + 1e-5*np.eye(Y_train.shape[0])
-            objective =0.5 * np.log(det(K)) + 0.5 * (Y_train-mu).dot(inv(K).dot(Y_train-mu)) + \
-                       0.5 * len(X_train) * np.log(2*np.pi)
+            #K = K + 1e-5*np.eye(Y_train.shape[0])
+            # Algorithm from Rassmusen 
+            L = cholesky(K)
+        
+            A1 = solve_triangular(L, Y_train, lower=True)
+            A2 = solve_triangular(L.T, A1, lower=False)
+        
+            objective =  np.sum(np.log(np.diagonal(L))) + 0.5 * Y_train.dot(A2) + 0.5*len(X_train) * np.log(2*np.pi)
+            #objective =0.5 * np.log(det(K)) + 0.5 * (Y_train-mu).dot(inv(K).dot(Y_train-mu)) + \
+                       #0.5 * len(X_train) * np.log(2*np.pi)
+                
+            # add prior to objective function
             for name,x in zip(self.prior.keys(),theta):
                 objective-= self.prior[name].log_p(x)
             self.training_loss.append(objective)
@@ -114,14 +122,12 @@ class Model:
             
     def MAP(self,X_train,Y_train,theta):
         self.theta = theta
-        #bounds noch anpassen
         bounds =[]
         for keys in self.prior:
             bounds.append(self.prior[keys].bounds)
         self.res = minimize(self.func_obj(X_train, Y_train), theta, 
                bounds=tuple(bounds),
                method='L-BFGS-B')
-        #self.res = minimize(self.func_obj(X_train, Y_train), theta, method='BFGS')
         return self.res
     
     def posterior_dist(self,X_s, X_train, Y_train,return_vals = False):
